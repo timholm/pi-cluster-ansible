@@ -44,26 +44,30 @@
           replace: "{{ vault_woodpecker_gitea_secret | default('configure-in-gitea') }}"
       no_log: true
 
-    - name: Create Woodpecker PV
-      command: |
-        kubectl apply -f - <<EOF
-        apiVersion: v1
-        kind: PersistentVolume
-        metadata:
-          name: woodpecker-pv
-        spec:
-          capacity:
-            storage: 10Gi
-          accessModes:
-            - ReadWriteOnce
-          hostPath:
-            path: /var/lib/woodpecker-data
-          persistentVolumeReclaimPolicy: Retain
-          storageClassName: ""
-          claimRef:
-            namespace: woodpecker
-            name: woodpecker-data-pvc
-        EOF
+    - name: Create Woodpecker PV manifest
+      copy:
+        dest: /root/manifests/woodpecker/pv.yaml
+        content: |
+          apiVersion: v1
+          kind: PersistentVolume
+          metadata:
+            name: woodpecker-pv
+          spec:
+            capacity:
+              storage: 10Gi
+            accessModes:
+              - ReadWriteOnce
+            hostPath:
+              path: /var/lib/woodpecker-data
+            persistentVolumeReclaimPolicy: Retain
+            storageClassName: ""
+            claimRef:
+              namespace: woodpecker
+              name: woodpecker-data-pvc
+        mode: '0644'
+
+    - name: Apply Woodpecker PV
+      command: kubectl apply -f /root/manifests/woodpecker/pv.yaml
       register: pv_result
       changed_when: "'created' in pv_result.stdout or 'configured' in pv_result.stdout"
 

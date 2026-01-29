@@ -1,0 +1,75 @@
+---
+# Cluster Configuration
+cluster_name: pi-cluster
+control_plane_endpoint: "192.168.8.197:6443"
+pod_network_cidr: "10.244.0.0/16"
+service_cidr: "10.96.0.0/12"
+
+# Container Runtime
+container_runtime: containerd
+containerd_version: "1.7"
+
+# Kubernetes Version
+kubernetes_version: "1.32"
+
+# Internal Registry Configuration
+registry_host: "192.168.8.197"
+registry_port: 30500
+registry_url: "{{ registry_host }}:{{ registry_port }}"
+registry_namespace: "registry"
+registry_storage_size: "50Gi"
+registry_storage_class: ""  # Empty for local storage
+
+# Gitea Configuration
+gitea_namespace: "gitea"
+gitea_http_port: 30300
+gitea_ssh_port: 30022
+gitea_storage_size: "20Gi"
+gitea_admin_user: "gitea_admin"
+# gitea_admin_password is in vault.yaml
+
+# Tekton Configuration
+tekton_namespace: "tekton-pipelines"
+tekton_dashboard_port: 30900
+tekton_pipelines_version: "v0.56.0"
+tekton_triggers_version: "v0.26.0"
+tekton_dashboard_version: "v0.43.0"
+
+# CNI Configuration
+cni_plugin: "flannel"
+flannel_version: "v0.26.7"
+
+# Image Registry Prefix (used after bootstrap)
+image_prefix: "registry.local:30500"
+
+# Pre-pull Images (for air-gap preparation)
+bootstrap_images:
+  - name: registry:2
+    tag: latest
+  - name: gitea/gitea
+    tag: 1.21-linux-arm64
+  - name: postgres
+    tag: 15-alpine
+  - name: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/controller
+    tag: "{{ tekton_pipelines_version }}"
+  - name: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/webhook
+    tag: "{{ tekton_pipelines_version }}"
+  - name: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/resolvers
+    tag: "{{ tekton_pipelines_version }}"
+  - name: gcr.io/tekton-releases/github.com/tektoncd/triggers/cmd/controller
+    tag: "{{ tekton_triggers_version }}"
+  - name: gcr.io/tekton-releases/github.com/tektoncd/triggers/cmd/webhook
+    tag: "{{ tekton_triggers_version }}"
+  - name: gcr.io/tekton-releases/github.com/tektoncd/triggers/cmd/interceptors
+    tag: "{{ tekton_triggers_version }}"
+  - name: gcr.io/tekton-releases/github.com/tektoncd/dashboard/cmd/dashboard
+    tag: "{{ tekton_dashboard_version }}"
+  - name: quay.io/buildah/buildah
+    tag: latest
+  - name: alpine/git
+    tag: latest
+  - name: bitnami/kubectl
+    tag: latest
+
+# Ansible Configuration
+ansible_python_interpreter: /usr/bin/python3

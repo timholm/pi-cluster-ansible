@@ -1,24 +1,59 @@
 ---
-# Main playbook: Deploy full Kubernetes cluster
-# Run with: ansible-playbook site.yml
+# Master playbook - runs all bootstrap playbooks in order
+# Usage: ansible-playbook site.yml
 
-- name: Deploy Kubernetes Cluster
-  import_playbook: playbooks/00-prerequisites.yml
+- name: Bootstrap Complete CI/CD Cluster
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display bootstrap info
+      debug:
+        msg: |
+          Starting full cluster bootstrap...
+          This will:
+          1. Prepare all nodes (prerequisites)
+          2. Configure containerd for internal registry
+          3. Initialize Kubernetes cluster
+          4. Deploy container registry
+          5. Deploy Gitea git server
+          6. Deploy Tekton CI/CD
+          7. Install ClusterTasks
 
-- name: Install Container Runtime
-  import_playbook: playbooks/01-containerd.yml
+# Import playbooks in order
+- import_playbook: playbooks/00-prerequisites.yaml
+- import_playbook: playbooks/01-containerd.yml
+- import_playbook: playbooks/01-containerd-registry.yaml
+- import_playbook: playbooks/02-kubeadm-install.yml
+- import_playbook: playbooks/03-init-control-plane.yml
+- import_playbook: playbooks/04-install-cni.yml
+- import_playbook: playbooks/06-join-workers.yml
+- import_playbook: playbooks/03-registry.yaml
+- import_playbook: playbooks/04-gitea.yaml
+- import_playbook: playbooks/05-tekton.yaml
+- import_playbook: playbooks/06-tekton-tasks.yaml
 
-- name: Install Kubernetes Tools
-  import_playbook: playbooks/02-kubeadm-install.yml
+- name: Bootstrap Complete
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display completion message
+      debug:
+        msg: |
+          ========================================
+          Cluster Bootstrap Complete!
+          ========================================
 
-- name: Initialize Control Plane
-  import_playbook: playbooks/03-init-control-plane.yml
+          Access Points:
+          - Registry: http://192.168.8.197:30500
+          - Gitea: http://192.168.8.197:30300
+          - Tekton Dashboard: http://192.168.8.197:30900
+          - Webhook Listener: http://192.168.8.197:30800
 
-- name: Install CNI
-  import_playbook: playbooks/04-install-cni.yml
+          Next Steps:
+          1. Access Gitea and complete initial setup
+          2. Create organization and repositories
+          3. Configure webhook to http://<node-ip>:30800
+          4. Push code to trigger pipelines!
 
-- name: Join Additional Control Plane Nodes
-  import_playbook: playbooks/05-join-control-plane.yml
-
-- name: Join Worker Nodes
-  import_playbook: playbooks/06-join-workers.yml
+          To tear down: ansible-playbook playbooks/99-teardown.yaml
+          ========================================

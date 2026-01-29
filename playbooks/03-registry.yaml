@@ -1,0 +1,55 @@
+---
+# Playbook: Deploy internal container registry
+# Deploys registry:2 as NodePort service
+
+- name: Deploy container registry
+  hosts: rpi-1
+  become: true
+  vars_files:
+    - ../group_vars/all.yaml
+  tasks:
+    - name: Copy registry manifests
+      copy:
+        src: ../files/manifests/registry/
+        dest: /root/manifests/registry/
+        mode: '0644'
+
+    - name: Apply registry namespace
+      command: kubectl apply -f /root/manifests/registry/namespace.yaml
+      register: ns_result
+      changed_when: "'created' in ns_result.stdout or 'configured' in ns_result.stdout"
+
+    - name: Apply registry PVC
+      command: kubectl apply -f /root/manifests/registry/pvc.yaml
+      register: pvc_result
+      changed_when: "'created' in pvc_result.stdout or 'configured' in pvc_result.stdout"
+
+    - name: Apply registry deployment
+      command: kubectl apply -f /root/manifests/registry/deployment.yaml
+      register: deploy_result
+      changed_when: "'created' in deploy_result.stdout or 'configured' in deploy_result.stdout"
+
+    - name: Apply registry service
+      command: kubectl apply -f /root/manifests/registry/service.yaml
+      register: svc_result
+      changed_when: "'created' in svc_result.stdout or 'configured' in svc_result.stdout"
+
+    - name: Wait for registry deployment to be ready
+      command: >
+        kubectl wait --for=condition=available deployment/registry
+        -n registry --timeout=300s
+      changed_when: false
+
+    - name: Verify registry is accessible
+      uri:
+        url: "http://{{ registry_host }}:{{ registry_port }}/v2/"
+        method: GET
+        status_code: 200
+      register: registry_check
+      retries: 10
+      delay: 10
+      until: registry_check.status == 200
+
+    - name: Display registry status
+      debug:
+        msg: "Registry is running at http://{{ registry_url }}"

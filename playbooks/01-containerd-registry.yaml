@@ -1,0 +1,63 @@
+---
+# Playbook: Configure containerd for internal registry
+# Configures all nodes to use insecure internal registry
+
+- name: Configure containerd for internal registry
+  hosts: k8s_cluster
+  become: true
+  vars_files:
+    - ../group_vars/all.yaml
+  tasks:
+    - name: Create containerd certs.d directory
+      file:
+        path: /etc/containerd/certs.d
+        state: directory
+        mode: '0755'
+
+    - name: Create registry mirror directory
+      file:
+        path: "/etc/containerd/certs.d/{{ registry_url }}"
+        state: directory
+        mode: '0755'
+
+    - name: Configure registry mirror
+      copy:
+        dest: "/etc/containerd/certs.d/{{ registry_url }}/hosts.toml"
+        content: |
+          server = "http://{{ registry_url }}"
+
+          [host."http://{{ registry_url }}"]
+            capabilities = ["pull", "resolve", "push"]
+            skip_verify = true
+        mode: '0644'
+      notify: Restart containerd
+
+    - name: Create registry.local hosts entry
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ registry_host }} registry.local"
+        state: present
+
+    - name: Configure containerd with registry mirror in config.toml
+      blockinfile:
+        path: /etc/containerd/config.toml
+        marker: "# {mark} ANSIBLE MANAGED - REGISTRY MIRROR"
+        insertafter: '\[plugins\."io\.containerd\.grpc\.v1\.cri"\]'
+        block: |
+          [plugins."io.containerd.grpc.v1.cri".registry]
+            [plugins."io.containerd.grpc.v1.cri".registry.mirrors]
+              [plugins."io.containerd.grpc.v1.cri".registry.mirrors."{{ registry_url }}"]
+                endpoint = ["http://{{ registry_url }}"]
+              [plugins."io.containerd.grpc.v1.cri".registry.mirrors."registry.local:{{ registry_port }}"]
+                endpoint = ["http://{{ registry_url }}"]
+            [plugins."io.containerd.grpc.v1.cri".registry.configs]
+              [plugins."io.containerd.grpc.v1.cri".registry.configs."{{ registry_url }}".tls]
+                insecure_skip_verify = true
+      notify: Restart containerd
+
+  handlers:
+    - name: Restart containerd
+      systemd:
+        name: containerd
+        state: restarted
+        daemon_reload: yes

@@ -1,100 +1,206 @@
-# Pi Cluster Ansible
+# Pi Cluster Ansible - Air-Gapped CI/CD Platform
 
-Ansible playbooks for deploying a highly available Kubernetes cluster on Raspberry Pi nodes using kubeadm.
+Ansible playbooks for deploying a fully air-gapped CI/CD platform on a Raspberry Pi cluster running upstream Kubernetes via kubeadm.
 
-## Cluster Architecture
+## Architecture
 
-- **3 Control Plane Nodes**: rpi-1, cm3588-plus, rpi-3
-- **6 Worker Nodes**: rpi-5, rpi-6, rpi-7, rpi-9, rpi-10, rpi-12
+- **13 Nodes**: rpi-1 through rpi-12 + cm3588-plus
+- **OS**: Debian 13 Trixie (ARM64)
+- **Kubernetes**: kubeadm v1.32
+- **Container Runtime**: containerd
+- **CNI**: Flannel
 
-## Prerequisites
+## Components
 
-- Ansible installed on your local machine
-- SSH access to all nodes
-- Debian/Raspbian OS on all nodes
+| Component | Port | Description |
+|-----------|------|-------------|
+| Container Registry | 30500 | registry:2 for internal images |
+| Gitea | 30300 (HTTP), 30022 (SSH) | Self-hosted Git server |
+| Tekton Dashboard | 30900 | Pipeline visualization |
+| Webhook Listener | 30800 | Gitea webhook receiver |
 
 ## Quick Start
 
-1. **Set up vault password** for SSH credentials:
-   ```bash
-   ansible-vault create inventory/group_vars/all/vault.yml
-   ```
-   Add: `vault_ssh_password: "your_password"`
-
-2. **Deploy the full cluster**:
-   ```bash
-   ansible-playbook site.yml --ask-vault-pass
-   ```
-
-## Playbooks
-
-| Playbook | Description |
-|----------|-------------|
-| `site.yml` | Full cluster deployment (runs all playbooks) |
-| `playbooks/00-prerequisites.yml` | System preparation (kernel modules, sysctl, swap) |
-| `playbooks/01-containerd.yml` | Install and configure containerd runtime |
-| `playbooks/02-kubeadm-install.yml` | Install kubeadm, kubelet, kubectl |
-| `playbooks/03-init-control-plane.yml` | Initialize first control plane node |
-| `playbooks/04-install-cni.yml` | Install Flannel CNI |
-| `playbooks/05-join-control-plane.yml` | Join additional control plane nodes |
-| `playbooks/06-join-workers.yml` | Join worker nodes |
-| `playbooks/reset-cluster.yml` | Teardown and reset cluster |
-
-## Individual Playbook Execution
-
-Run playbooks step by step:
-
 ```bash
-# Prepare all nodes
-ansible-playbook playbooks/00-prerequisites.yml --ask-vault-pass
+# Full bootstrap (all playbooks in order)
+ansible-playbook site.yml
 
-# Install containerd
-ansible-playbook playbooks/01-containerd.yml --ask-vault-pass
-
-# Install kubernetes tools
-ansible-playbook playbooks/02-kubeadm-install.yml --ask-vault-pass
-
-# Initialize cluster
-ansible-playbook playbooks/03-init-control-plane.yml --ask-vault-pass
-
-# Install CNI
-ansible-playbook playbooks/04-install-cni.yml --ask-vault-pass
-
-# Join other control plane nodes
-ansible-playbook playbooks/05-join-control-plane.yml --ask-vault-pass
-
-# Join workers
-ansible-playbook playbooks/06-join-workers.yml --ask-vault-pass
+# Or run individual playbooks
+ansible-playbook playbooks/00-prerequisites.yaml
+ansible-playbook playbooks/01-containerd.yml
+ansible-playbook playbooks/01-containerd-registry.yaml
+ansible-playbook playbooks/02-kubeadm-install.yml
+ansible-playbook playbooks/03-init-control-plane.yml
+ansible-playbook playbooks/04-install-cni.yml
+ansible-playbook playbooks/06-join-workers.yml
+ansible-playbook playbooks/03-registry.yaml
+ansible-playbook playbooks/04-gitea.yaml
+ansible-playbook playbooks/05-tekton.yaml
+ansible-playbook playbooks/06-tekton-tasks.yaml
 ```
 
-## Reset Cluster
+## Directory Structure
 
-To completely tear down the cluster:
-
-```bash
-ansible-playbook playbooks/reset-cluster.yml --ask-vault-pass
+```
+pi-cluster-ansible/
+├── ansible.cfg
+├── site.yml                    # Master playbook
+├── kubeconfig                  # Cluster access config
+├── inventory/
+│   ├── hosts.yml              # Node inventory
+│   └── group_vars/
+│       └── all/
+│           └── vault.yml      # Encrypted secrets
+├── group_vars/
+│   ├── all.yaml               # Global variables
+│   └── vault.yaml             # Secrets (encrypt with ansible-vault)
+├── playbooks/
+│   ├── 00-prerequisites.yaml  # Node preparation
+│   ├── 01-containerd.yml      # Container runtime
+│   ├── 01-containerd-registry.yaml # Registry mirror config
+│   ├── 02-kubeadm-install.yml # Kubernetes tools
+│   ├── 03-init-control-plane.yml # Cluster init
+│   ├── 03-registry.yaml       # Deploy registry
+│   ├── 04-install-cni.yml     # Flannel CNI
+│   ├── 04-gitea.yaml          # Deploy Gitea
+│   ├── 05-tekton.yaml         # Deploy Tekton
+│   ├── 06-join-workers.yml    # Join worker nodes
+│   ├── 06-tekton-tasks.yaml   # ClusterTasks
+│   └── 99-teardown.yaml       # Destroy cluster
+├── files/
+│   └── manifests/
+│       ├── registry/          # Registry k8s manifests
+│       ├── gitea/             # Gitea k8s manifests
+│       └── tekton/            # Tekton ClusterTasks
+└── roles/                     # Ansible roles (future)
 ```
 
-## Inventory
+## ClusterTasks
 
-Edit `inventory/hosts.yml` to match your node IPs and usernames.
+| Task | Description |
+|------|-------------|
+| `git-clone` | Clone from internal Gitea |
+| `buildah-build-push` | Build & push images (ARM64, privileged) |
+| `kustomize-deploy` | Deploy with kustomize overlays |
+
+## Application Repository Standard
+
+All applications should follow this structure:
+
+```
+app-name/
+├── src/
+├── Dockerfile
+├── k8s/
+│   ├── base/
+│   │   ├── kustomization.yaml
+│   │   ├── deployment.yaml
+│   │   └── service.yaml
+│   └── overlays/
+│       └── prod/
+│           └── kustomization.yaml
+└── tekton/
+    ├── pipeline.yaml
+    └── trigger.yaml
+```
+
+## Pre-pull Images for Air-Gap
+
+Before disconnecting from internet, pull these images:
+
+```bash
+# Core images
+docker pull registry:2
+docker pull gitea/gitea:1.21-linux-arm64
+docker pull postgres:15-alpine
+docker pull quay.io/buildah/buildah:latest
+docker pull alpine/git:latest
+docker pull bitnami/kubectl:latest
+
+# Tekton images (see group_vars/all.yaml for versions)
+docker pull gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/controller:v0.56.0
+docker pull gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/webhook:v0.56.0
+# ... additional tekton images
+```
 
 ## Configuration
 
-- **Kubernetes version**: 1.32 (configurable in `playbooks/02-kubeadm-install.yml`)
-- **CNI**: Flannel (configurable in `playbooks/04-install-cni.yml`)
-- **Pod CIDR**: 10.244.0.0/16
+### group_vars/all.yaml
+Main configuration file with registry, gitea, and tekton settings.
 
-## Node IPs
+### group_vars/vault.yaml
+Secrets file - encrypt with:
+```bash
+ansible-vault encrypt group_vars/vault.yaml
+```
 
-| Node | IP | Role |
-|------|-----|------|
-| rpi-1 | 192.168.8.197 | Control Plane |
-| cm3588-plus | 192.168.8.152 | Control Plane |
-| rpi-3 | 192.168.8.195 | Control Plane |
-| rpi-5 | 192.168.8.108 | Worker |
-| rpi-6 | 192.168.8.235 | Worker |
-| rpi-7 | 192.168.8.209 | Worker |
-| rpi-9 | 192.168.8.187 | Worker |
-| rpi-10 | 192.168.8.210 | Worker |
-| rpi-12 | 192.168.8.105 | Worker |
+## Usage Examples
+
+### Run a Pipeline Manually
+
+```bash
+kubectl create -f - <<EOF
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  generateName: myapp-
+  namespace: tekton-pipelines
+spec:
+  serviceAccountName: tekton-pipeline-sa
+  pipelineRef:
+    name: build-and-deploy
+  params:
+    - name: git-url
+      value: "http://gitea.local:30300/myorg/myapp.git"
+    - name: image-name
+      value: "registry.local:30500/myapp:v1"
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 1Gi
+EOF
+```
+
+### Configure Gitea Webhook
+
+1. Go to Repository → Settings → Webhooks
+2. Add webhook:
+   - URL: `http://<node-ip>:30800`
+   - Content-Type: `application/json`
+   - Trigger: Push events
+
+## Teardown
+
+```bash
+# Interactive (requires confirmation)
+ansible-playbook playbooks/99-teardown.yaml
+
+# Force (no confirmation)
+ansible-playbook playbooks/99-teardown.yaml -e force_teardown=true
+```
+
+## Nodes
+
+| Node | IP | Role | User |
+|------|-----|------|------|
+| rpi-1 | 192.168.8.197 | control-plane | rpi1 |
+| rpi-2 | 192.168.8.196 | worker | rpi2 |
+| rpi-3 | 192.168.8.195 | worker | rpi3 |
+| rpi-4 | 192.168.8.194 | worker | rpi4 |
+| rpi-5 | 192.168.8.108 | worker | pi |
+| rpi-6 | 192.168.8.235 | worker | pi |
+| rpi-7 | 192.168.8.209 | worker | pi |
+| rpi-8 | 192.168.8.202 | worker | pi |
+| rpi-9 | 192.168.8.187 | worker | pi |
+| rpi-10 | 192.168.8.210 | worker | pi |
+| rpi-11 | 192.168.8.231 | worker | pi |
+| rpi-12 | 192.168.8.105 | worker | pi |
+| cm3588-plus | 192.168.8.152 | worker | root |
+
+## License
+
+MIT

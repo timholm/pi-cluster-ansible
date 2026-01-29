@@ -1,0 +1,8 @@
+---
+# Ansible Vault encrypted secrets
+# To encrypt: ansible-vault encrypt group_vars/vault.yaml
+# To edit: ansible-vault edit group_vars/vault.yaml
+
+vault_ssh_password: "19209746"
+vault_gitea_admin_password: "GitAdmin2024!"
+vault_gitea_db_password: "GiteaDB2024!"

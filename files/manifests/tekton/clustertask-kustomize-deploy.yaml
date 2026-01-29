@@ -1,0 +1,99 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: ClusterTask
+metadata:
+  name: kustomize-deploy
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/pipelines.minVersion: "0.38.0"
+    tekton.dev/categories: Deployment
+    tekton.dev/tags: kubernetes, kustomize
+    tekton.dev/displayName: "Kustomize Deploy"
+spec:
+  description: >-
+    Deploy application using kustomize overlays
+  workspaces:
+    - name: source
+      description: Workspace containing k8s manifests
+  params:
+    - name: OVERLAY_PATH
+      description: Path to kustomize overlay directory
+      type: string
+      default: "k8s/overlays/prod"
+    - name: IMAGE
+      description: New image to set (format name=newimage:tag)
+      type: string
+      default: ""
+    - name: NAMESPACE
+      description: Target namespace for deployment
+      type: string
+      default: "default"
+    - name: WAIT
+      description: Wait for deployment rollout
+      type: string
+      default: "true"
+    - name: TIMEOUT
+      description: Timeout for deployment rollout
+      type: string
+      default: "300s"
+  results:
+    - name: DEPLOYED_RESOURCES
+      description: List of deployed resources
+  steps:
+    - name: deploy
+      image: bitnami/kubectl:latest
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: PARAM_OVERLAY_PATH
+          value: $(params.OVERLAY_PATH)
+        - name: PARAM_IMAGE
+          value: $(params.IMAGE)
+        - name: PARAM_NAMESPACE
+          value: $(params.NAMESPACE)
+        - name: PARAM_WAIT
+          value: $(params.WAIT)
+        - name: PARAM_TIMEOUT
+          value: $(params.TIMEOUT)
+      script: |
+        #!/bin/bash
+        set -eu
+
+        echo "Deploying from: ${PARAM_OVERLAY_PATH}"
+        echo "Namespace: ${PARAM_NAMESPACE}"
+
+        cd "${PARAM_OVERLAY_PATH}"
+
+        # Update image if specified
+        if [ -n "${PARAM_IMAGE}" ]; then
+          echo "Setting image: ${PARAM_IMAGE}"
+          # Extract name and image from param
+          IMG_NAME=$(echo "${PARAM_IMAGE}" | cut -d= -f1)
+          IMG_VALUE=$(echo "${PARAM_IMAGE}" | cut -d= -f2)
+          kubectl kustomize edit set image "${IMG_NAME}=${IMG_VALUE}" || true
+        fi
+
+        # Build and apply kustomize
+        echo "Applying kustomize manifests..."
+        kubectl kustomize . | kubectl apply -n "${PARAM_NAMESPACE}" -f -
+
+        # Get deployed resources
+        RESOURCES=$(kubectl kustomize . | grep "^kind:" | sort -u | tr '\n' ',' || echo "unknown")
+        echo -n "${RESOURCES}" > $(results.DEPLOYED_RESOURCES.path)
+
+        # Wait for deployments if requested
+        if [ "${PARAM_WAIT}" = "true" ]; then
+          echo "Waiting for deployments to roll out..."
+
+          # Get all deployments from kustomize output
+          DEPLOYMENTS=$(kubectl kustomize . | grep -A1 "kind: Deployment" | grep "name:" | awk '{print $2}' || true)
+
+          for deploy in ${DEPLOYMENTS}; do
+            echo "Waiting for deployment/${deploy}..."
+            kubectl rollout status deployment/"${deploy}" \
+              -n "${PARAM_NAMESPACE}" \
+              --timeout="${PARAM_TIMEOUT}" || true
+          done
+        fi
+
+        echo "Deployment completed successfully"

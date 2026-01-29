@@ -1,0 +1,104 @@
+---
+# Playbook: Deploy Gitea git server
+# Deploys Gitea with PostgreSQL backend
+
+- name: Deploy Gitea
+  hosts: rpi-1
+  become: true
+  vars_files:
+    - ../group_vars/all.yaml
+    - ../group_vars/vault.yaml
+  tasks:
+    - name: Create manifests directory
+      file:
+        path: /root/manifests/gitea
+        state: directory
+        mode: '0755'
+
+    - name: Copy gitea manifests
+      copy:
+        src: ../files/manifests/gitea/
+        dest: /root/manifests/gitea/
+        mode: '0644'
+
+    - name: Generate random secret key
+      command: openssl rand -hex 32
+      register: secret_key
+      changed_when: false
+
+    - name: Generate random internal token
+      command: openssl rand -hex 32
+      register: internal_token
+      changed_when: false
+
+    - name: Update secrets with actual values
+      replace:
+        path: /root/manifests/gitea/secrets.yaml
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - regexp: "GITEA_DB_PASSWORD_PLACEHOLDER"
+          replace: "{{ vault_gitea_db_password }}"
+        - regexp: "GITEA_SECRET_KEY_PLACEHOLDER"
+          replace: "{{ secret_key.stdout }}"
+        - regexp: "GITEA_INTERNAL_TOKEN_PLACEHOLDER"
+          replace: "{{ internal_token.stdout }}"
+      no_log: true
+
+    - name: Apply gitea namespace
+      command: kubectl apply -f /root/manifests/gitea/namespace.yaml
+      register: ns_result
+      changed_when: "'created' in ns_result.stdout or 'configured' in ns_result.stdout"
+
+    - name: Apply gitea secrets
+      command: kubectl apply -f /root/manifests/gitea/secrets.yaml
+      register: secret_result
+      changed_when: "'created' in secret_result.stdout or 'configured' in secret_result.stdout"
+
+    - name: Apply gitea PVCs
+      command: kubectl apply -f /root/manifests/gitea/pvc.yaml
+      register: pvc_result
+      changed_when: "'created' in pvc_result.stdout or 'configured' in pvc_result.stdout"
+
+    - name: Apply postgres deployment
+      command: kubectl apply -f /root/manifests/gitea/postgres.yaml
+      register: pg_result
+      changed_when: "'created' in pg_result.stdout or 'configured' in pg_result.stdout"
+
+    - name: Wait for postgres deployment to be ready
+      command: >
+        kubectl wait --for=condition=available deployment/postgres
+        -n gitea --timeout=300s
+      changed_when: false
+
+    - name: Apply gitea deployment
+      command: kubectl apply -f /root/manifests/gitea/deployment.yaml
+      register: deploy_result
+      changed_when: "'created' in deploy_result.stdout or 'configured' in deploy_result.stdout"
+
+    - name: Apply gitea service
+      command: kubectl apply -f /root/manifests/gitea/service.yaml
+      register: svc_result
+      changed_when: "'created' in svc_result.stdout or 'configured' in svc_result.stdout"
+
+    - name: Wait for gitea deployment to be ready
+      command: >
+        kubectl wait --for=condition=available deployment/gitea
+        -n gitea --timeout=600s
+      changed_when: false
+
+    - name: Add gitea.local to /etc/hosts on all nodes
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ registry_host }} gitea.local"
+        state: present
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['k8s_cluster'] }}"
+
+    - name: Display Gitea access info
+      debug:
+        msg: |
+          Gitea is running!
+          HTTP: http://{{ registry_host }}:{{ gitea_http_port }}
+          SSH: ssh://git@{{ registry_host }}:{{ gitea_ssh_port }}
+          Complete initial setup at the web interface.

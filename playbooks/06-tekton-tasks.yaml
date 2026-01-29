@@ -1,0 +1,100 @@
+---
+# Playbook: Deploy Tekton ClusterTasks and example resources
+# Installs reusable tasks for CI/CD pipelines
+
+- name: Deploy Tekton ClusterTasks
+  hosts: rpi-1
+  become: true
+  vars_files:
+    - ../group_vars/all.yaml
+  tasks:
+    - name: Create tekton tasks manifests directory
+      file:
+        path: /root/manifests/tekton/tasks
+        state: directory
+        mode: '0755'
+
+    - name: Copy ClusterTask manifests
+      copy:
+        src: "{{ item }}"
+        dest: /root/manifests/tekton/tasks/
+        mode: '0644'
+      loop:
+        - ../files/manifests/tekton/clustertask-git-clone.yaml
+        - ../files/manifests/tekton/clustertask-buildah.yaml
+        - ../files/manifests/tekton/clustertask-kustomize-deploy.yaml
+        - ../files/manifests/tekton/rbac.yaml
+        - ../files/manifests/tekton/example-pipeline.yaml
+
+    - name: Apply git-clone ClusterTask
+      command: kubectl apply -f /root/manifests/tekton/tasks/clustertask-git-clone.yaml
+      register: gitclone_result
+      changed_when: "'created' in gitclone_result.stdout or 'configured' in gitclone_result.stdout"
+
+    - name: Apply buildah-build-push ClusterTask
+      command: kubectl apply -f /root/manifests/tekton/tasks/clustertask-buildah.yaml
+      register: buildah_result
+      changed_when: "'created' in buildah_result.stdout or 'configured' in buildah_result.stdout"
+
+    - name: Apply kustomize-deploy ClusterTask
+      command: kubectl apply -f /root/manifests/tekton/tasks/clustertask-kustomize-deploy.yaml
+      register: kustomize_result
+      changed_when: "'created' in kustomize_result.stdout or 'configured' in kustomize_result.stdout"
+
+    - name: Apply RBAC for pipeline service account
+      command: kubectl apply -f /root/manifests/tekton/tasks/rbac.yaml
+      register: rbac_result
+      changed_when: "'created' in rbac_result.stdout or 'configured' in rbac_result.stdout"
+
+    - name: Apply example pipeline and triggers
+      command: kubectl apply -f /root/manifests/tekton/tasks/example-pipeline.yaml
+      register: pipeline_result
+      changed_when: "'created' in pipeline_result.stdout or 'configured' in pipeline_result.stdout"
+
+    - name: Wait for EventListener to be ready
+      command: >
+        kubectl wait --for=condition=ready eventlistener/gitea-listener
+        -n tekton-pipelines --timeout=120s
+      changed_when: false
+      ignore_errors: true
+
+    - name: Display ClusterTasks info
+      command: kubectl get clustertasks
+      register: tasks_list
+      changed_when: false
+
+    - name: Show installed ClusterTasks
+      debug:
+        msg: |
+          Installed ClusterTasks:
+          {{ tasks_list.stdout }}
+
+          Available endpoints:
+          - Tekton Dashboard: http://{{ registry_host }}:{{ tekton_dashboard_port }}
+          - Event Listener (webhooks): http://{{ registry_host }}:30800
+
+          To run a pipeline manually:
+          kubectl create -f - <<EOF
+          apiVersion: tekton.dev/v1beta1
+          kind: PipelineRun
+          metadata:
+            generateName: test-run-
+            namespace: tekton-pipelines
+          spec:
+            serviceAccountName: tekton-pipeline-sa
+            pipelineRef:
+              name: build-and-deploy
+            params:
+              - name: git-url
+                value: "http://gitea.local:30300/org/repo.git"
+              - name: image-name
+                value: "registry.local:30500/myapp:latest"
+            workspaces:
+              - name: shared-workspace
+                volumeClaimTemplate:
+                  spec:
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 1Gi
+          EOF

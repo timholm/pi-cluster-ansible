@@ -1,0 +1,111 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: ClusterTask
+metadata:
+  name: git-clone
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/pipelines.minVersion: "0.38.0"
+    tekton.dev/categories: Git
+    tekton.dev/tags: git
+    tekton.dev/displayName: "Git Clone"
+spec:
+  description: >-
+    Clone a git repository from internal Gitea server
+  workspaces:
+    - name: output
+      description: The git repo will be cloned onto this workspace
+    - name: ssh-directory
+      optional: true
+      description: SSH key for private repos
+    - name: basic-auth
+      optional: true
+      description: Basic auth credentials for HTTPS
+  params:
+    - name: url
+      description: Repository URL to clone from
+      type: string
+    - name: revision
+      description: Branch, tag, or commit to checkout
+      type: string
+      default: "main"
+    - name: submodules
+      description: Initialize and fetch git submodules
+      type: string
+      default: "true"
+    - name: depth
+      description: Shallow clone depth (0 for full clone)
+      type: string
+      default: "1"
+    - name: sslVerify
+      description: Enable SSL verification
+      type: string
+      default: "false"
+    - name: subdirectory
+      description: Subdirectory inside workspace to clone into
+      type: string
+      default: ""
+    - name: deleteExisting
+      description: Delete existing contents of workspace
+      type: string
+      default: "true"
+  results:
+    - name: commit
+      description: The commit SHA that was cloned
+    - name: url
+      description: The URL that was cloned
+  steps:
+    - name: clone
+      image: alpine/git:latest
+      env:
+        - name: PARAM_URL
+          value: $(params.url)
+        - name: PARAM_REVISION
+          value: $(params.revision)
+        - name: PARAM_SUBMODULES
+          value: $(params.submodules)
+        - name: PARAM_DEPTH
+          value: $(params.depth)
+        - name: PARAM_SSL_VERIFY
+          value: $(params.sslVerify)
+        - name: PARAM_SUBDIRECTORY
+          value: $(params.subdirectory)
+        - name: PARAM_DELETE_EXISTING
+          value: $(params.deleteExisting)
+        - name: WORKSPACE_OUTPUT_PATH
+          value: $(workspaces.output.path)
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+
+        if [ "${PARAM_SSL_VERIFY}" = "false" ]; then
+          git config --global http.sslVerify false
+        fi
+
+        CHECKOUT_DIR="${WORKSPACE_OUTPUT_PATH}/${PARAM_SUBDIRECTORY}"
+
+        if [ "${PARAM_DELETE_EXISTING}" = "true" ] && [ -d "${CHECKOUT_DIR}" ]; then
+          rm -rf "${CHECKOUT_DIR}"
+        fi
+
+        mkdir -p "${CHECKOUT_DIR}"
+        cd "${CHECKOUT_DIR}"
+
+        CLONE_ARGS=""
+        if [ "${PARAM_DEPTH}" != "0" ]; then
+          CLONE_ARGS="--depth ${PARAM_DEPTH}"
+        fi
+
+        git clone ${CLONE_ARGS} "${PARAM_URL}" .
+        git checkout "${PARAM_REVISION}"
+
+        if [ "${PARAM_SUBMODULES}" = "true" ]; then
+          git submodule update --init --recursive
+        fi
+
+        RESULT_SHA=$(git rev-parse HEAD)
+        echo -n "${RESULT_SHA}" > $(results.commit.path)
+        echo -n "${PARAM_URL}" > $(results.url.path)
+
+        echo "Cloned ${PARAM_URL} at revision ${PARAM_REVISION} (${RESULT_SHA})"

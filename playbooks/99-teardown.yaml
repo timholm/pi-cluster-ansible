@@ -1,0 +1,202 @@
+---
+# Playbook: Teardown entire cluster
+# WARNING: This will destroy all data!
+
+- name: Confirm teardown
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Require confirmation
+      pause:
+        prompt: |
+          WARNING: This will destroy the entire cluster and all data!
+          Type 'yes-destroy-everything' to continue
+      register: confirm
+      when: force_teardown is not defined or not force_teardown
+
+    - name: Verify confirmation
+      fail:
+        msg: "Teardown cancelled - confirmation not received"
+      when:
+        - force_teardown is not defined or not force_teardown
+        - confirm.user_input != 'yes-destroy-everything'
+
+- name: Delete Tekton resources
+  hosts: rpi-1
+  become: true
+  ignore_errors: true
+  tasks:
+    - name: Delete Tekton Dashboard
+      command: kubectl delete -f /root/manifests/tekton/dashboard-release.yaml
+      ignore_errors: true
+
+    - name: Delete Tekton Triggers
+      command: kubectl delete -f /root/manifests/tekton/triggers-release.yaml
+      ignore_errors: true
+
+    - name: Delete Tekton Pipelines
+      command: kubectl delete -f /root/manifests/tekton/pipelines-release.yaml
+      ignore_errors: true
+
+- name: Delete Gitea
+  hosts: rpi-1
+  become: true
+  ignore_errors: true
+  tasks:
+    - name: Delete Gitea deployment
+      command: kubectl delete -f /root/manifests/gitea/ --ignore-not-found
+      ignore_errors: true
+
+    - name: Delete Gitea namespace
+      command: kubectl delete namespace gitea --ignore-not-found
+      ignore_errors: true
+
+- name: Delete Registry
+  hosts: rpi-1
+  become: true
+  ignore_errors: true
+  tasks:
+    - name: Delete registry deployment
+      command: kubectl delete -f /root/manifests/registry/ --ignore-not-found
+      ignore_errors: true
+
+    - name: Delete registry namespace
+      command: kubectl delete namespace registry --ignore-not-found
+      ignore_errors: true
+
+- name: Drain worker nodes
+  hosts: rpi-1
+  become: true
+  tasks:
+    - name: Get worker nodes
+      command: kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o jsonpath='{.items[*].metadata.name}'
+      register: worker_nodes
+      ignore_errors: true
+
+    - name: Drain worker nodes
+      command: "kubectl drain {{ item }} --ignore-daemonsets --delete-emptydir-data --force"
+      loop: "{{ worker_nodes.stdout.split() }}"
+      ignore_errors: true
+      when: worker_nodes.stdout != ""
+
+    - name: Delete worker nodes from cluster
+      command: "kubectl delete node {{ item }}"
+      loop: "{{ worker_nodes.stdout.split() }}"
+      ignore_errors: true
+      when: worker_nodes.stdout != ""
+
+- name: Reset worker nodes
+  hosts: workers
+  become: true
+  tasks:
+    - name: Reset kubeadm on workers
+      command: kubeadm reset -f
+      ignore_errors: true
+
+    - name: Clean up kubernetes directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - /var/lib/etcd
+        - /etc/cni/net.d
+        - /opt/cni/bin
+        - ~/.kube
+      ignore_errors: true
+
+    - name: Clean up iptables
+      shell: |
+        iptables -F
+        iptables -t nat -F
+        iptables -t mangle -F
+        iptables -X
+      ignore_errors: true
+
+- name: Reset control plane nodes
+  hosts: control_plane
+  become: true
+  tasks:
+    - name: Reset kubeadm on control plane
+      command: kubeadm reset -f
+      ignore_errors: true
+
+    - name: Clean up kubernetes directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - /var/lib/etcd
+        - /etc/cni/net.d
+        - /opt/cni/bin
+        - ~/.kube
+        - /root/.kube
+        - /root/manifests
+      ignore_errors: true
+
+    - name: Clean up iptables
+      shell: |
+        iptables -F
+        iptables -t nat -F
+        iptables -t mangle -F
+        iptables -X
+      ignore_errors: true
+
+- name: Clean up containerd on all nodes
+  hosts: k8s_cluster
+  become: true
+  tasks:
+    - name: Stop containerd
+      systemd:
+        name: containerd
+        state: stopped
+      ignore_errors: true
+
+    - name: Remove containerd images and containers
+      shell: |
+        rm -rf /var/lib/containerd/*
+        rm -rf /run/containerd/*
+      ignore_errors: true
+
+    - name: Remove registry mirror config
+      file:
+        path: /etc/containerd/certs.d
+        state: absent
+      ignore_errors: true
+
+    - name: Remove hosts entries
+      lineinfile:
+        path: /etc/hosts
+        regexp: "{{ item }}"
+        state: absent
+      loop:
+        - "registry.local"
+        - "gitea.local"
+      ignore_errors: true
+
+    - name: Start containerd
+      systemd:
+        name: containerd
+        state: started
+      ignore_errors: true
+
+- name: Teardown complete
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display completion message
+      debug:
+        msg: |
+          Cluster teardown complete!
+
+          To rebuild the cluster, run the playbooks in order:
+          1. ansible-playbook playbooks/00-prerequisites.yaml
+          2. ansible-playbook playbooks/01-containerd-registry.yaml
+          3. ansible-playbook playbooks/02-kubeadm-cluster.yaml
+          4. ansible-playbook playbooks/03-registry.yaml
+          5. ansible-playbook playbooks/04-gitea.yaml
+          6. ansible-playbook playbooks/05-tekton.yaml
+          7. ansible-playbook playbooks/06-tekton-tasks.yaml

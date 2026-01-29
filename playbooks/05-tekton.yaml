@@ -1,0 +1,104 @@
+---
+# Playbook: Deploy Tekton Pipelines, Triggers, and Dashboard
+# Installs Tekton components from release manifests
+
+- name: Deploy Tekton
+  hosts: rpi-1
+  become: true
+  vars_files:
+    - ../group_vars/all.yaml
+  tasks:
+    - name: Create tekton manifests directory
+      file:
+        path: /root/manifests/tekton
+        state: directory
+        mode: '0755'
+
+    - name: Download Tekton Pipelines release manifest
+      get_url:
+        url: "https://storage.googleapis.com/tekton-releases/pipeline/previous/{{ tekton_pipelines_version }}/release.yaml"
+        dest: /root/manifests/tekton/pipelines-release.yaml
+        mode: '0644'
+      register: pipelines_download
+
+    - name: Download Tekton Triggers release manifest
+      get_url:
+        url: "https://storage.googleapis.com/tekton-releases/triggers/previous/{{ tekton_triggers_version }}/release.yaml"
+        dest: /root/manifests/tekton/triggers-release.yaml
+        mode: '0644'
+      register: triggers_download
+
+    - name: Download Tekton Triggers interceptors
+      get_url:
+        url: "https://storage.googleapis.com/tekton-releases/triggers/previous/{{ tekton_triggers_version }}/interceptors.yaml"
+        dest: /root/manifests/tekton/triggers-interceptors.yaml
+        mode: '0644'
+      register: interceptors_download
+
+    - name: Download Tekton Dashboard release manifest
+      get_url:
+        url: "https://storage.googleapis.com/tekton-releases/dashboard/previous/{{ tekton_dashboard_version }}/release.yaml"
+        dest: /root/manifests/tekton/dashboard-release.yaml
+        mode: '0644'
+      register: dashboard_download
+
+    - name: Apply Tekton Pipelines
+      command: kubectl apply -f /root/manifests/tekton/pipelines-release.yaml
+      register: pipelines_result
+      changed_when: "'created' in pipelines_result.stdout or 'configured' in pipelines_result.stdout"
+
+    - name: Wait for Tekton Pipelines controller to be ready
+      command: >
+        kubectl wait --for=condition=available deployment/tekton-pipelines-controller
+        -n tekton-pipelines --timeout=300s
+      changed_when: false
+
+    - name: Wait for Tekton Pipelines webhook to be ready
+      command: >
+        kubectl wait --for=condition=available deployment/tekton-pipelines-webhook
+        -n tekton-pipelines --timeout=300s
+      changed_when: false
+
+    - name: Apply Tekton Triggers
+      command: kubectl apply -f /root/manifests/tekton/triggers-release.yaml
+      register: triggers_result
+      changed_when: "'created' in triggers_result.stdout or 'configured' in triggers_result.stdout"
+
+    - name: Apply Tekton Triggers interceptors
+      command: kubectl apply -f /root/manifests/tekton/triggers-interceptors.yaml
+      register: interceptors_result
+      changed_when: "'created' in interceptors_result.stdout or 'configured' in interceptors_result.stdout"
+
+    - name: Wait for Tekton Triggers controller to be ready
+      command: >
+        kubectl wait --for=condition=available deployment/tekton-triggers-controller
+        -n tekton-pipelines --timeout=300s
+      changed_when: false
+
+    - name: Apply Tekton Dashboard
+      command: kubectl apply -f /root/manifests/tekton/dashboard-release.yaml
+      register: dashboard_result
+      changed_when: "'created' in dashboard_result.stdout or 'configured' in dashboard_result.stdout"
+
+    - name: Wait for Tekton Dashboard to be ready
+      command: >
+        kubectl wait --for=condition=available deployment/tekton-dashboard
+        -n tekton-pipelines --timeout=300s
+      changed_when: false
+
+    - name: Patch Tekton Dashboard service to NodePort
+      command: >
+        kubectl patch svc tekton-dashboard -n tekton-pipelines
+        -p '{"spec": {"type": "NodePort", "ports": [{"port": 9097, "targetPort": 9097, "nodePort": 30900}]}}'
+      register: patch_result
+      changed_when: "'patched' in patch_result.stdout"
+      failed_when: false
+
+    - name: Display Tekton status
+      debug:
+        msg: |
+          Tekton is installed!
+          Dashboard: http://{{ registry_host }}:{{ tekton_dashboard_port }}
+          Pipelines version: {{ tekton_pipelines_version }}
+          Triggers version: {{ tekton_triggers_version }}
+          Dashboard version: {{ tekton_dashboard_version }}

@@ -1,0 +1,122 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: ClusterTask
+metadata:
+  name: buildah-build-push
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/pipelines.minVersion: "0.38.0"
+    tekton.dev/categories: Image Build
+    tekton.dev/tags: image-build
+    tekton.dev/displayName: "Buildah Build and Push"
+spec:
+  description: >-
+    Build and push container image using Buildah (ARM64 compatible, privileged)
+  workspaces:
+    - name: source
+      description: Workspace containing the source code and Dockerfile
+  params:
+    - name: IMAGE
+      description: Full image name including registry (e.g., registry.local:30500/myapp:v1)
+      type: string
+    - name: DOCKERFILE
+      description: Path to Dockerfile relative to workspace
+      type: string
+      default: "./Dockerfile"
+    - name: CONTEXT
+      description: Build context directory
+      type: string
+      default: "."
+    - name: BUILD_ARGS
+      description: Build arguments (space-separated KEY=VALUE pairs)
+      type: string
+      default: ""
+    - name: PUSH
+      description: Push image to registry
+      type: string
+      default: "true"
+    - name: TLS_VERIFY
+      description: Verify TLS certificates
+      type: string
+      default: "false"
+    - name: FORMAT
+      description: Image format (oci or docker)
+      type: string
+      default: "oci"
+  results:
+    - name: IMAGE_DIGEST
+      description: Digest of the built image
+    - name: IMAGE_URL
+      description: Full URL of the pushed image
+  steps:
+    - name: build-and-push
+      image: quay.io/buildah/buildah:latest
+      workingDir: $(workspaces.source.path)
+      securityContext:
+        privileged: true
+      env:
+        - name: PARAM_IMAGE
+          value: $(params.IMAGE)
+        - name: PARAM_DOCKERFILE
+          value: $(params.DOCKERFILE)
+        - name: PARAM_CONTEXT
+          value: $(params.CONTEXT)
+        - name: PARAM_BUILD_ARGS
+          value: $(params.BUILD_ARGS)
+        - name: PARAM_PUSH
+          value: $(params.PUSH)
+        - name: PARAM_TLS_VERIFY
+          value: $(params.TLS_VERIFY)
+        - name: PARAM_FORMAT
+          value: $(params.FORMAT)
+      script: |
+        #!/usr/bin/env bash
+        set -eu
+
+        # Build arguments
+        BUILD_ARGS_FLAGS=""
+        if [ -n "${PARAM_BUILD_ARGS}" ]; then
+          for arg in ${PARAM_BUILD_ARGS}; do
+            BUILD_ARGS_FLAGS="${BUILD_ARGS_FLAGS} --build-arg ${arg}"
+          done
+        fi
+
+        echo "Building image: ${PARAM_IMAGE}"
+        echo "Dockerfile: ${PARAM_DOCKERFILE}"
+        echo "Context: ${PARAM_CONTEXT}"
+
+        # Build the image
+        buildah bud \
+          --format="${PARAM_FORMAT}" \
+          --tls-verify="${PARAM_TLS_VERIFY}" \
+          ${BUILD_ARGS_FLAGS} \
+          -f "${PARAM_DOCKERFILE}" \
+          -t "${PARAM_IMAGE}" \
+          "${PARAM_CONTEXT}"
+
+        echo "Build completed successfully"
+
+        # Push if requested
+        if [ "${PARAM_PUSH}" = "true" ]; then
+          echo "Pushing image to registry..."
+          buildah push \
+            --tls-verify="${PARAM_TLS_VERIFY}" \
+            "${PARAM_IMAGE}" \
+            "docker://${PARAM_IMAGE}"
+          echo "Push completed successfully"
+        fi
+
+        # Get image digest
+        DIGEST=$(buildah inspect --format '{{.FromImageDigest}}' "${PARAM_IMAGE}" || echo "")
+        echo -n "${DIGEST}" > $(results.IMAGE_DIGEST.path)
+        echo -n "${PARAM_IMAGE}" > $(results.IMAGE_URL.path)
+
+        echo "Image: ${PARAM_IMAGE}"
+        echo "Digest: ${DIGEST}"
+      volumeMounts:
+        - name: varlibcontainers
+          mountPath: /var/lib/containers
+  volumes:
+    - name: varlibcontainers
+      emptyDir: {}

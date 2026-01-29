@@ -1,0 +1,170 @@
+---
+# Example Pipeline demonstrating git-clone, buildah-build-push, and kustomize-deploy
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: build-and-deploy
+  namespace: tekton-pipelines
+spec:
+  description: >-
+    Clone repo, build image with Buildah, and deploy with Kustomize
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+    - name: git-revision
+      type: string
+      description: Git branch/tag/commit
+      default: "main"
+    - name: image-name
+      type: string
+      description: Full image name (registry.local:30500/app:tag)
+    - name: dockerfile
+      type: string
+      description: Path to Dockerfile
+      default: "./Dockerfile"
+    - name: kustomize-overlay
+      type: string
+      description: Path to kustomize overlay
+      default: "k8s/overlays/prod"
+    - name: deploy-namespace
+      type: string
+      description: Target namespace
+      default: "default"
+  workspaces:
+    - name: shared-workspace
+      description: Workspace shared between tasks
+  tasks:
+    - name: fetch-source
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+        - name: sslVerify
+          value: "false"
+
+    - name: build-image
+      taskRef:
+        name: buildah-build-push
+        kind: ClusterTask
+      runAfter:
+        - fetch-source
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: IMAGE
+          value: $(params.image-name)
+        - name: DOCKERFILE
+          value: $(params.dockerfile)
+        - name: TLS_VERIFY
+          value: "false"
+
+    - name: deploy
+      taskRef:
+        name: kustomize-deploy
+        kind: ClusterTask
+      runAfter:
+        - build-image
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: OVERLAY_PATH
+          value: $(params.kustomize-overlay)
+        - name: IMAGE
+          value: "app=$(params.image-name)"
+        - name: NAMESPACE
+          value: $(params.deploy-namespace)
+---
+# TriggerTemplate for webhook-based pipeline execution
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: build-and-deploy-template
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: git-url
+      description: Git repository URL
+    - name: git-revision
+      description: Git revision
+      default: "main"
+    - name: image-name
+      description: Full image name
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        generateName: build-and-deploy-
+        namespace: tekton-pipelines
+      spec:
+        serviceAccountName: tekton-pipeline-sa
+        pipelineRef:
+          name: build-and-deploy
+        params:
+          - name: git-url
+            value: $(tt.params.git-url)
+          - name: git-revision
+            value: $(tt.params.git-revision)
+          - name: image-name
+            value: $(tt.params.image-name)
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 1Gi
+---
+# TriggerBinding for Gitea webhooks
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: gitea-push-binding
+  namespace: tekton-pipelines
+spec:
+  params:
+    - name: git-url
+      value: $(body.repository.clone_url)
+    - name: git-revision
+      value: $(body.after)
+---
+# EventListener for Gitea webhooks
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: gitea-listener
+  namespace: tekton-pipelines
+spec:
+  serviceAccountName: tekton-pipeline-sa
+  triggers:
+    - name: gitea-push-trigger
+      bindings:
+        - ref: gitea-push-binding
+      template:
+        ref: build-and-deploy-template
+---
+# Service for EventListener
+apiVersion: v1
+kind: Service
+metadata:
+  name: el-gitea-listener
+  namespace: tekton-pipelines
+spec:
+  type: NodePort
+  selector:
+    eventlistener: gitea-listener
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30800

@@ -81,3 +81,22 @@
           {{ join_command.stdout }} --control-plane --certificate-key {{ cert_key.stdout_lines[-1] }}
         dest: /root/control-plane-join-command.txt
         mode: '0600'
+
+    - name: Fetch kubeconfig to local machine
+      fetch:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ playbook_dir }}/../kubeconfig"
+        flat: yes
+
+    - name: Display kubeconfig location
+      debug:
+        msg: "Kubeconfig saved to: {{ playbook_dir }}/../kubeconfig"
+
+    - name: Read kubeconfig content
+      slurp:
+        src: /etc/kubernetes/admin.conf
+      register: kubeconfig_content
+
+    - name: Display kubeconfig for copying
+      debug:
+        msg: "{{ kubeconfig_content.content | b64decode }}"

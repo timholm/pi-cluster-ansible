@@ -7,6 +7,6 @@ vault_ssh_password: "19209746"
 vault_gitea_admin_password: "GitAdmin2024!"
 vault_gitea_db_password: "GiteaDB2024!"
 
-# Woodpecker CI - configure after Gitea OAuth2 app created
-vault_woodpecker_gitea_client: "configure-after-gitea-setup"
-vault_woodpecker_gitea_secret: "configure-after-gitea-setup"
+# Woodpecker CI OAuth2 (from Gitea)
+vault_woodpecker_gitea_client: "f072090f-1dea-439e-b4a1-5e52e61b634d"
+vault_woodpecker_gitea_secret: "gto_qmbukmbtqumvdfyudyskke6lsjqy5f3hzbs46pfo4ogeuhrvm77a"

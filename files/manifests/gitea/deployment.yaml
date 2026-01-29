@@ -76,6 +76,8 @@ spec:
               value: "false"
             - name: GITEA__service__REQUIRE_SIGNIN_VIEW
               value: "false"
+            - name: GITEA__security__INSTALL_LOCK
+              value: "true"
           volumeMounts:
             - name: gitea-data
               mountPath: /data

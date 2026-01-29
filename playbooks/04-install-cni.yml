@@ -1,0 +1,34 @@
+---
+# Playbook: Install CNI (Container Network Interface)
+# Using Flannel as the pod network
+
+- name: Install Flannel CNI
+  hosts: rpi-1
+  become: true
+  vars:
+    flannel_version: "v0.26.7"
+  tasks:
+    - name: Wait for API server to be ready
+      command: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes
+      register: nodes_result
+      until: nodes_result.rc == 0
+      retries: 10
+      delay: 10
+      changed_when: false
+
+    - name: Download Flannel manifest
+      get_url:
+        url: "https://github.com/flannel-io/flannel/releases/download/{{ flannel_version }}/kube-flannel.yml"
+        dest: /root/kube-flannel.yml
+        mode: '0644'
+
+    - name: Apply Flannel CNI
+      command: kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f /root/kube-flannel.yml
+      register: flannel_result
+      changed_when: "'created' in flannel_result.stdout or 'configured' in flannel_result.stdout"
+
+    - name: Wait for Flannel pods to be ready
+      command: >
+        kubectl --kubeconfig=/etc/kubernetes/admin.conf
+        wait --for=condition=ready pod -l app=flannel -n kube-flannel --timeout=120s
+      changed_when: false

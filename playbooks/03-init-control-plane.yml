@@ -1,0 +1,83 @@
+---
+# Playbook: Initialize the first control plane node
+# This creates the Kubernetes cluster
+
+- name: Initialize first control plane node
+  hosts: rpi-1
+  become: true
+  vars:
+    pod_network_cidr: "10.244.0.0/16"
+    control_plane_endpoint: "192.168.8.197:6443"  # Change for HA with load balancer
+  tasks:
+    - name: Check if cluster is already initialized
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubeadm_init
+
+    - name: Initialize the cluster
+      command: >
+        kubeadm init
+        --control-plane-endpoint={{ control_plane_endpoint }}
+        --pod-network-cidr={{ pod_network_cidr }}
+        --upload-certs
+      register: kubeadm_output
+      when: not kubeadm_init.stat.exists
+
+    - name: Save kubeadm init output
+      copy:
+        content: "{{ kubeadm_output.stdout }}"
+        dest: /root/kubeadm-init-output.txt
+      when: kubeadm_output.changed
+
+    - name: Create .kube directory for root
+      file:
+        path: /root/.kube
+        state: directory
+        mode: '0755'
+
+    - name: Copy admin.conf to root user
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: yes
+        mode: '0600'
+
+    - name: Create .kube directory for regular user
+      file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        mode: '0755'
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Copy admin.conf to regular user
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "/home/{{ ansible_user }}/.kube/config"
+        remote_src: yes
+        mode: '0600'
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Generate join command for workers
+      command: kubeadm token create --print-join-command
+      register: join_command
+      changed_when: false
+
+    - name: Save worker join command
+      copy:
+        content: "{{ join_command.stdout }}"
+        dest: /root/worker-join-command.txt
+        mode: '0600'
+
+    - name: Generate certificate key for control plane join
+      command: kubeadm init phase upload-certs --upload-certs
+      register: cert_key
+      changed_when: false
+
+    - name: Save control plane join info
+      copy:
+        content: |
+          {{ join_command.stdout }} --control-plane --certificate-key {{ cert_key.stdout_lines[-1] }}
+        dest: /root/control-plane-join-command.txt
+        mode: '0600'

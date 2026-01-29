@@ -1,0 +1,25 @@
+# Ansible
+*.retry
+.ansible_cache/
+inventory/group_vars/all/vault.yml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Secrets
+*.pem
+*.key
+secrets/

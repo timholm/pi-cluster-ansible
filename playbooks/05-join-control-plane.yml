@@ -1,0 +1,45 @@
+---
+# Playbook: Join additional control plane nodes
+# Makes the cluster highly available with 3 masters
+
+- name: Get control plane join command
+  hosts: rpi-1
+  become: true
+  tasks:
+    - name: Read control plane join command
+      slurp:
+        src: /root/control-plane-join-command.txt
+      register: cp_join_command_file
+
+    - name: Set join command fact
+      set_fact:
+        control_plane_join_command: "{{ cp_join_command_file.content | b64decode | trim }}"
+
+- name: Join additional control plane nodes
+  hosts: control_plane:!rpi-1
+  become: true
+  tasks:
+    - name: Check if node is already part of cluster
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Join control plane
+      command: "{{ hostvars['rpi-1']['control_plane_join_command'] }}"
+      when: not kubelet_conf.stat.exists
+      register: join_result
+
+    - name: Create .kube directory
+      file:
+        path: /root/.kube
+        state: directory
+        mode: '0755'
+      when: join_result.changed
+
+    - name: Copy admin.conf
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: yes
+        mode: '0600'
+      when: join_result.changed

@@ -1,0 +1,24 @@
+---
+# Main playbook: Deploy full Kubernetes cluster
+# Run with: ansible-playbook site.yml
+
+- name: Deploy Kubernetes Cluster
+  import_playbook: playbooks/00-prerequisites.yml
+
+- name: Install Container Runtime
+  import_playbook: playbooks/01-containerd.yml
+
+- name: Install Kubernetes Tools
+  import_playbook: playbooks/02-kubeadm-install.yml
+
+- name: Initialize Control Plane
+  import_playbook: playbooks/03-init-control-plane.yml
+
+- name: Install CNI
+  import_playbook: playbooks/04-install-cni.yml
+
+- name: Join Additional Control Plane Nodes
+  import_playbook: playbooks/05-join-control-plane.yml
+
+- name: Join Worker Nodes
+  import_playbook: playbooks/06-join-workers.yml

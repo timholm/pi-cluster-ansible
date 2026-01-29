@@ -1,0 +1,196 @@
+---
+# Playbook: Deploy Envoy Gateway (Kubernetes Gateway API)
+# Provides Gateway API implementation using Envoy
+
+- name: Deploy Envoy Gateway
+  hosts: rpi-1
+  become: true
+  vars_files:
+    - ../group_vars/all.yaml
+  vars:
+    envoy_gateway_version: "1.6.3"
+    gateway_nodeport: 30088
+  tasks:
+    - name: Create envoy-gateway manifests directory
+      file:
+        path: /root/manifests/envoy-gateway
+        state: directory
+        mode: '0755'
+
+    - name: Install Envoy Gateway
+      command: >
+        kubectl apply -f
+        https://github.com/envoyproxy/gateway/releases/download/v{{ envoy_gateway_version }}/install.yaml
+      register: install_result
+      changed_when: "'created' in install_result.stdout"
+      ignore_errors: true
+
+    - name: Wait for Envoy Gateway to be ready
+      command: >
+        kubectl wait --for=condition=available deployment/envoy-gateway
+        -n envoy-gateway-system --timeout=300s
+      changed_when: false
+
+    - name: Create GatewayClass manifest
+      copy:
+        dest: /root/manifests/envoy-gateway/gatewayclass.yaml
+        content: |
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: GatewayClass
+          metadata:
+            name: envoy
+          spec:
+            controllerName: gateway.envoyproxy.io/gatewayclass-controller
+        mode: '0644'
+
+    - name: Apply GatewayClass
+      command: kubectl apply -f /root/manifests/envoy-gateway/gatewayclass.yaml
+      register: gc_result
+      changed_when: "'created' in gc_result.stdout"
+
+    - name: Create Gateway manifest
+      copy:
+        dest: /root/manifests/envoy-gateway/gateway.yaml
+        content: |
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: Gateway
+          metadata:
+            name: main-gateway
+            namespace: default
+          spec:
+            gatewayClassName: envoy
+            listeners:
+              - name: http
+                protocol: HTTP
+                port: 80
+                allowedRoutes:
+                  namespaces:
+                    from: All
+        mode: '0644'
+
+    - name: Apply Gateway
+      command: kubectl apply -f /root/manifests/envoy-gateway/gateway.yaml
+      register: gw_result
+      changed_when: "'created' in gw_result.stdout"
+
+    - name: Wait for Gateway proxy to be created
+      command: >
+        kubectl wait --for=condition=ready pod
+        -l gateway.envoyproxy.io/owning-gateway-name=main-gateway
+        -n envoy-gateway-system --timeout=120s
+      changed_when: false
+      retries: 3
+      delay: 10
+
+    - name: Get Gateway service name
+      command: kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=main-gateway -o jsonpath='{.items[0].metadata.name}'
+      register: gw_svc_name
+      changed_when: false
+
+    - name: Patch Gateway service for NodePort access
+      command: >
+        kubectl patch svc {{ gw_svc_name.stdout }} -n envoy-gateway-system
+        -p '{"spec": {"type": "NodePort", "externalTrafficPolicy": "Cluster", "ports": [{"port": 80, "targetPort": 10080, "nodePort": {{ gateway_nodeport }}, "name": "http"}]}}'
+      register: patch_result
+      changed_when: "'patched' in patch_result.stdout"
+
+    - name: Create HTTPRoute for Gitea
+      copy:
+        dest: /root/manifests/envoy-gateway/httproute-gitea.yaml
+        content: |
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: gitea-route
+            namespace: gitea
+          spec:
+            parentRefs:
+              - name: main-gateway
+                namespace: default
+            hostnames:
+              - "gitea.local"
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /
+                backendRefs:
+                  - name: gitea
+                    port: 3000
+        mode: '0644'
+
+    - name: Create HTTPRoute for Woodpecker
+      copy:
+        dest: /root/manifests/envoy-gateway/httproute-woodpecker.yaml
+        content: |
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: woodpecker-route
+            namespace: woodpecker
+          spec:
+            parentRefs:
+              - name: main-gateway
+                namespace: default
+            hostnames:
+              - "woodpecker.local"
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /
+                backendRefs:
+                  - name: woodpecker-server
+                    port: 8000
+        mode: '0644'
+
+    - name: Create HTTPRoute for Registry
+      copy:
+        dest: /root/manifests/envoy-gateway/httproute-registry.yaml
+        content: |
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: registry-route
+            namespace: registry
+          spec:
+            parentRefs:
+              - name: main-gateway
+                namespace: default
+            hostnames:
+              - "registry.local"
+            rules:
+              - matches:
+                  - path:
+                      type: PathPrefix
+                      value: /
+                backendRefs:
+                  - name: registry
+                    port: 5000
+        mode: '0644'
+
+    - name: Apply HTTPRoutes
+      command: kubectl apply -f /root/manifests/envoy-gateway/{{ item }}
+      loop:
+        - httproute-gitea.yaml
+        - httproute-woodpecker.yaml
+        - httproute-registry.yaml
+      register: route_result
+      changed_when: "'created' in route_result.stdout"
+
+    - name: Display Envoy Gateway info
+      debug:
+        msg: |
+          Envoy Gateway (Gateway API) is running!
+          Gateway: http://{{ registry_host }}:{{ gateway_nodeport }}
+
+          Routes configured:
+          - gitea.local -> Gitea
+          - woodpecker.local -> Woodpecker CI
+          - registry.local -> Container Registry
+
+          Test with:
+          curl -H "Host: gitea.local" http://{{ registry_host }}:{{ gateway_nodeport }}/
+
+          Add to /etc/hosts:
+          {{ registry_host }} gitea.local woodpecker.local registry.local

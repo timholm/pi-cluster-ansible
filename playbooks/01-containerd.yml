@@ -17,16 +17,76 @@
         state: directory
         mode: '0755'
 
-    - name: Generate default containerd config
+    # Check if root filesystem is overlayfs (causes issues with containerd's overlayfs snapshotter)
+    - name: Check root filesystem type
+      shell: df -T / | tail -1 | awk '{print $2}'
+      register: root_fs_type
+      changed_when: false
+
+    - name: Find alternative storage for containerd (when root is overlayfs)
+      shell: |
+        # Find first ext4/xfs mount point with enough space (excluding root-related mounts)
+        df -T | grep -E 'ext4|xfs' | grep -v '/boot' | awk '$5 > 10000000 {print $7; exit}'
+      register: alt_storage
+      when: root_fs_type.stdout == 'overlay'
+      changed_when: false
+
+    - name: Set containerd root path
+      set_fact:
+        containerd_root: "{{ (root_fs_type.stdout == 'overlay' and alt_storage.stdout | default('') != '') | ternary(alt_storage.stdout + '/containerd', '/var/lib/containerd') }}"
+
+    - name: Create containerd storage directory
+      file:
+        path: "{{ containerd_root }}"
+        state: directory
+        mode: '0755'
+      when: containerd_root != '/var/lib/containerd'
+
+    # Use custom config for overlayfs root systems
+    - name: Configure containerd (overlayfs root - use alternative storage)
+      copy:
+        dest: /etc/containerd/config.toml
+        content: |
+          version = 2
+          root = "{{ containerd_root }}"
+          state = "/run/containerd"
+
+          [plugins]
+            [plugins."io.containerd.grpc.v1.cri"]
+              sandbox_image = "registry.k8s.io/pause:3.10"
+              [plugins."io.containerd.grpc.v1.cri".cni]
+                bin_dir = "/usr/lib/cni"
+                conf_dir = "/etc/cni/net.d"
+              [plugins."io.containerd.grpc.v1.cri".containerd]
+                [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+                  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+                    runtime_type = "io.containerd.runc.v2"
+                    [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+                      SystemdCgroup = true
+      when: root_fs_type.stdout == 'overlay'
+      notify: Restart containerd
+
+    # Use standard config for normal filesystems
+    - name: Generate default containerd config (standard filesystem)
       shell: containerd config default > /etc/containerd/config.toml
       args:
         creates: /etc/containerd/config.toml
+      when: root_fs_type.stdout != 'overlay'
 
-    - name: Enable SystemdCgroup in containerd
+    - name: Enable SystemdCgroup in containerd (standard filesystem)
       lineinfile:
         path: /etc/containerd/config.toml
         regexp: 'SystemdCgroup = false'
         line: '            SystemdCgroup = true'
+      when: root_fs_type.stdout != 'overlay'
+      notify: Restart containerd
+
+    - name: Set sandbox image to pause:3.10 (standard filesystem)
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: 'sandbox_image = "registry.k8s.io/pause:.*"'
+        line: '    sandbox_image = "registry.k8s.io/pause:3.10"'
+      when: root_fs_type.stdout != 'overlay'
       notify: Restart containerd
 
     - name: Enable and start containerd

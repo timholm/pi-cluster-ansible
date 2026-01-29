@@ -33,7 +33,7 @@
 
     - name: Set containerd root path
       set_fact:
-        containerd_root: "{{ (root_fs_type.stdout == 'overlay' and alt_storage.stdout | default('') != '') | ternary(alt_storage.stdout + '/containerd', '/var/lib/containerd') }}"
+        containerd_root: "{{ (root_fs_type.stdout == 'overlay' and (alt_storage.stdout | default('')) != '') | ternary(alt_storage.stdout | default('') + '/containerd', '/var/lib/containerd') }}"
 
     - name: Create containerd storage directory
       file:

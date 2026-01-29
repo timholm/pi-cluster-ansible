@@ -16,28 +16,28 @@
 
     - name: Download Tekton Pipelines release manifest
       get_url:
-        url: "https://storage.googleapis.com/tekton-releases/pipeline/previous/{{ tekton_pipelines_version }}/release.yaml"
+        url: "https://github.com/tektoncd/pipeline/releases/download/{{ tekton_pipelines_version }}/release.yaml"
         dest: /root/manifests/tekton/pipelines-release.yaml
         mode: '0644'
       register: pipelines_download
 
     - name: Download Tekton Triggers release manifest
       get_url:
-        url: "https://storage.googleapis.com/tekton-releases/triggers/previous/{{ tekton_triggers_version }}/release.yaml"
+        url: "https://github.com/tektoncd/triggers/releases/download/{{ tekton_triggers_version }}/release.yaml"
         dest: /root/manifests/tekton/triggers-release.yaml
         mode: '0644'
       register: triggers_download
 
     - name: Download Tekton Triggers interceptors
       get_url:
-        url: "https://storage.googleapis.com/tekton-releases/triggers/previous/{{ tekton_triggers_version }}/interceptors.yaml"
+        url: "https://github.com/tektoncd/triggers/releases/download/{{ tekton_triggers_version }}/interceptors.yaml"
         dest: /root/manifests/tekton/triggers-interceptors.yaml
         mode: '0644'
       register: interceptors_download
 
     - name: Download Tekton Dashboard release manifest
       get_url:
-        url: "https://storage.googleapis.com/tekton-releases/dashboard/previous/{{ tekton_dashboard_version }}/release.yaml"
+        url: "https://github.com/tektoncd/dashboard/releases/download/{{ tekton_dashboard_version }}/release.yaml"
         dest: /root/manifests/tekton/dashboard-release.yaml
         mode: '0644'
       register: dashboard_download

@@ -38,22 +38,8 @@
         line: "{{ registry_host }} registry.local"
         state: present
 
-    - name: Configure containerd with registry mirror in config.toml
-      blockinfile:
-        path: /etc/containerd/config.toml
-        marker: "# {mark} ANSIBLE MANAGED - REGISTRY MIRROR"
-        insertafter: '\[plugins\."io\.containerd\.grpc\.v1\.cri"\]'
-        block: |
-          [plugins."io.containerd.grpc.v1.cri".registry]
-            [plugins."io.containerd.grpc.v1.cri".registry.mirrors]
-              [plugins."io.containerd.grpc.v1.cri".registry.mirrors."{{ registry_url }}"]
-                endpoint = ["http://{{ registry_url }}"]
-              [plugins."io.containerd.grpc.v1.cri".registry.mirrors."registry.local:{{ registry_port }}"]
-                endpoint = ["http://{{ registry_url }}"]
-            [plugins."io.containerd.grpc.v1.cri".registry.configs]
-              [plugins."io.containerd.grpc.v1.cri".registry.configs."{{ registry_url }}".tls]
-                insecure_skip_verify = true
-      notify: Restart containerd
+    # Note: Using certs.d approach above is sufficient for containerd 1.5+
+    # The hosts.toml file in certs.d directory handles registry configuration
 
   handlers:
     - name: Restart containerd

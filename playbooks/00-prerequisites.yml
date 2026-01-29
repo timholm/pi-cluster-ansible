@@ -6,6 +6,40 @@
   hosts: k8s_cluster
   become: true
   tasks:
+    # Remove K3s if present (from previous installations)
+    - name: Stop K3s services if running
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - k3s
+        - k3s-agent
+      ignore_errors: yes
+
+    - name: Disable K3s services
+      systemd:
+        name: "{{ item }}"
+        enabled: no
+      loop:
+        - k3s
+        - k3s-agent
+      ignore_errors: yes
+
+    - name: Run K3s uninstall script if present
+      shell: |
+        /usr/local/bin/k3s-uninstall.sh 2>/dev/null || true
+        /usr/local/bin/k3s-agent-uninstall.sh 2>/dev/null || true
+      ignore_errors: yes
+
+    - name: Remove K3s directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/rancher
+        - /var/lib/rancher
+      ignore_errors: yes
+
     - name: Update apt cache
       apt:
         update_cache: yes
@@ -24,7 +58,6 @@
           - curl
           - gnupg
           - lsb-release
-          - software-properties-common
         state: present
 
     - name: Disable swap
@@ -36,6 +69,58 @@
         path: /etc/fstab
         regexp: '.*swap.*'
         state: absent
+
+    - name: Remove systemd-zram-generator package (Raspberry Pi)
+      apt:
+        name:
+          - systemd-zram-generator
+          - rpi-swap
+        state: absent
+        purge: yes
+      ignore_errors: yes
+
+    - name: Stop swap services
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - dev-zram0.swap
+        - systemd-zram-setup@zram0.service
+        - zram-swap.service
+        - zramswap.service
+        - dphys-swapfile.service
+        - rpi-swap.service
+      ignore_errors: yes
+
+    - name: Mask swap services
+      systemd:
+        name: "{{ item }}"
+        masked: yes
+      loop:
+        - dev-zram0.swap
+        - systemd-zram-setup@zram0.service
+        - zram-swap.service
+        - zramswap.service
+        - dphys-swapfile.service
+        - rpi-swap.service
+        - swap.target
+      ignore_errors: yes
+
+    - name: Blacklist zram module
+      copy:
+        dest: /etc/modprobe.d/blacklist-zram.conf
+        content: |
+          blacklist zram
+        mode: '0644'
+
+    - name: Remove zram module if loaded
+      command: rmmod zram
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Final swap disable
+      command: swapoff -a
+      changed_when: false
 
     - name: Load kernel modules
       copy:

@@ -47,6 +47,12 @@
         - kubeadm
         - kubectl
 
+    - name: Unmask kubelet service if masked
+      command: systemctl unmask kubelet
+      register: unmask_result
+      changed_when: "'Removed' in unmask_result.stderr or 'Removed' in unmask_result.stdout"
+      failed_when: false
+
     - name: Enable kubelet service
       systemd:
         name: kubelet

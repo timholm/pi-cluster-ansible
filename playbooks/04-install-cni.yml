@@ -32,3 +32,23 @@
         kubectl --kubeconfig=/etc/kubernetes/admin.conf
         wait --for=condition=ready pod -l app=flannel -n kube-flannel --timeout=120s
       changed_when: false
+
+# Fix CNI path issue on all nodes - Flannel installs to /opt/cni/bin but Debian kubelet looks in /usr/lib/cni
+- name: Fix Flannel CNI path on all nodes
+  hosts: k8s_cluster
+  become: true
+  tasks:
+    - name: Wait for flannel binary to be installed
+      wait_for:
+        path: /opt/cni/bin/flannel
+        timeout: 120
+      ignore_errors: yes
+
+    - name: Copy flannel binary to /usr/lib/cni
+      copy:
+        src: /opt/cni/bin/flannel
+        dest: /usr/lib/cni/flannel
+        mode: '0755'
+        remote_src: yes
+      when: ansible_facts['os_family'] == 'Debian'
+      ignore_errors: yes

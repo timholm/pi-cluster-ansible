@@ -1,0 +1,103 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: woodpecker-server
+  namespace: woodpecker
+  labels:
+    app: woodpecker-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: woodpecker-server
+  template:
+    metadata:
+      labels:
+        app: woodpecker-server
+    spec:
+      containers:
+        - name: woodpecker-server
+          image: woodpeckerci/woodpecker-server:latest
+          ports:
+            - containerPort: 8000
+              name: http
+            - containerPort: 9000
+              name: grpc
+          env:
+            - name: WOODPECKER_OPEN
+              value: "true"
+            - name: WOODPECKER_HOST
+              value: "http://woodpecker.local:30380"
+            - name: WOODPECKER_GITEA
+              value: "true"
+            - name: WOODPECKER_GITEA_URL
+              value: "http://gitea.local:30300"
+            - name: WOODPECKER_GITEA_CLIENT
+              valueFrom:
+                secretKeyRef:
+                  name: woodpecker-secrets
+                  key: WOODPECKER_GITEA_CLIENT
+            - name: WOODPECKER_GITEA_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: woodpecker-secrets
+                  key: WOODPECKER_GITEA_SECRET
+            - name: WOODPECKER_AGENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: woodpecker-secrets
+                  key: WOODPECKER_AGENT_SECRET
+            - name: WOODPECKER_DATABASE_DRIVER
+              value: "sqlite3"
+            - name: WOODPECKER_DATABASE_DATASOURCE
+              value: "/var/lib/woodpecker/woodpecker.sqlite"
+            - name: WOODPECKER_ADMIN
+              value: "gitea_admin"
+          volumeMounts:
+            - name: woodpecker-data
+              mountPath: /var/lib/woodpecker
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: woodpecker-data
+          persistentVolumeClaim:
+            claimName: woodpecker-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: woodpecker-server
+  namespace: woodpecker
+  labels:
+    app: woodpecker-server
+spec:
+  type: NodePort
+  selector:
+    app: woodpecker-server
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30380
+      name: http
+    - port: 9000
+      targetPort: 9000
+      nodePort: 30390
+      name: grpc

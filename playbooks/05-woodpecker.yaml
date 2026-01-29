@@ -1,0 +1,121 @@
+---
+# Playbook: Deploy Woodpecker CI
+# ARM64-native CI/CD system integrated with Gitea
+
+- name: Deploy Woodpecker CI
+  hosts: rpi-1
+  become: true
+  vars_files:
+    - ../group_vars/all.yaml
+    - ../group_vars/vault.yaml
+  vars:
+    woodpecker_namespace: "woodpecker"
+    woodpecker_http_port: 30380
+    woodpecker_grpc_port: 30390
+  tasks:
+    - name: Create woodpecker manifests directory
+      file:
+        path: /root/manifests/woodpecker
+        state: directory
+        mode: '0755'
+
+    - name: Copy woodpecker manifests
+      copy:
+        src: ../files/manifests/woodpecker/
+        dest: /root/manifests/woodpecker/
+        mode: '0644'
+
+    - name: Generate agent secret
+      command: openssl rand -hex 32
+      register: agent_secret
+      changed_when: false
+
+    - name: Update secrets with actual values
+      replace:
+        path: /root/manifests/woodpecker/secrets.yaml
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - regexp: "WOODPECKER_AGENT_SECRET_PLACEHOLDER"
+          replace: "{{ agent_secret.stdout }}"
+        - regexp: "WOODPECKER_GITEA_CLIENT_PLACEHOLDER"
+          replace: "{{ vault_woodpecker_gitea_client | default('configure-in-gitea') }}"
+        - regexp: "WOODPECKER_GITEA_SECRET_PLACEHOLDER"
+          replace: "{{ vault_woodpecker_gitea_secret | default('configure-in-gitea') }}"
+      no_log: true
+
+    - name: Create Woodpecker PV
+      command: |
+        kubectl apply -f - <<EOF
+        apiVersion: v1
+        kind: PersistentVolume
+        metadata:
+          name: woodpecker-pv
+        spec:
+          capacity:
+            storage: 10Gi
+          accessModes:
+            - ReadWriteOnce
+          hostPath:
+            path: /var/lib/woodpecker-data
+          persistentVolumeReclaimPolicy: Retain
+          storageClassName: ""
+          claimRef:
+            namespace: woodpecker
+            name: woodpecker-data-pvc
+        EOF
+      register: pv_result
+      changed_when: "'created' in pv_result.stdout or 'configured' in pv_result.stdout"
+
+    - name: Apply woodpecker namespace
+      command: kubectl apply -f /root/manifests/woodpecker/namespace.yaml
+      register: ns_result
+      changed_when: "'created' in ns_result.stdout"
+
+    - name: Apply woodpecker secrets
+      command: kubectl apply -f /root/manifests/woodpecker/secrets.yaml
+      register: secret_result
+      changed_when: "'created' in secret_result.stdout"
+
+    - name: Apply woodpecker PVC
+      command: kubectl apply -f /root/manifests/woodpecker/pvc.yaml
+      register: pvc_result
+      changed_when: "'created' in pvc_result.stdout"
+
+    - name: Apply woodpecker server
+      command: kubectl apply -f /root/manifests/woodpecker/server.yaml
+      register: server_result
+      changed_when: "'created' in server_result.stdout"
+
+    - name: Wait for woodpecker server to be ready
+      command: >
+        kubectl wait --for=condition=available deployment/woodpecker-server
+        -n woodpecker --timeout=300s
+      changed_when: false
+
+    - name: Apply woodpecker agent
+      command: kubectl apply -f /root/manifests/woodpecker/agent.yaml
+      register: agent_result
+      changed_when: "'created' in agent_result.stdout"
+
+    - name: Add woodpecker.local to /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ registry_host }} woodpecker.local"
+        state: present
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['k8s_cluster'] }}"
+
+    - name: Display Woodpecker info
+      debug:
+        msg: |
+          Woodpecker CI is running!
+          URL: http://{{ registry_host }}:{{ woodpecker_http_port }}
+
+          Next steps:
+          1. Go to Gitea -> Settings -> Applications
+          2. Create OAuth2 application:
+             - Name: Woodpecker
+             - Redirect URI: http://{{ registry_host }}:{{ woodpecker_http_port }}/authorize
+          3. Update vault.yaml with client ID and secret
+          4. Re-run this playbook to update secrets
